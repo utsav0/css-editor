@@ -1,0 +1,45 @@
+:host {
+    --overlay-color: rgba(100, 149, 237, 0.3);
+    --border-color: #6495ed;
+    --tooltip-bg: #333;
+    --tooltip-text: #fff;
+    --popup-bg: #fff;
+}
+
+.inspector-overlay {
+    position: fixed;
+    pointer-events: none;
+    background-color: var(--overlay-color);
+    border: 2px solid var(--border-color);
+    z-index: 2147483646;
+    display: none;
+    box-sizing: border-box;
+    transition: all 0.1s ease-out;
+}
+
+.inspector-tooltip {
+    position: absolute;
+    top: -25px;
+    left: 0;
+    background-color: var(--tooltip-bg);
+    color: var(--tooltip-text);
+    padding: 2px 6px;
+    font-size: 12px;
+    font-family: monospace;
+    border-radius: 3px;
+    white-space: nowrap;
+    z-index: 2147483647;
+}
+
+.inspector-popup {
+    position: fixed;
+    background-color: var(--popup-bg);
+    width: 200px;
+    height: 150px;
+    border: 1px solid #ccc;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    border-radius: 6px;
+    display: none;
+    z-index: 2147483647;
+    padding: 10px;
+}
