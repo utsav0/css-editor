@@ -1,11 +1,22 @@
+/* --- Host Variables --- */
+*{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
 :host {
     --overlay-color: rgba(100, 149, 237, 0.3);
     --border-color: #6495ed;
     --tooltip-bg: #333;
     --tooltip-text: #fff;
     --popup-bg: #fff;
+    --popup-border: #ccc;
+    --text-primary: #333;
+    --text-secondary: #888;
+    --font-mono: "Consolas", "Monaco", "Courier New", monospace;
 }
 
+/* --- The Overlay & Tooltip --- */
 .inspector-overlay {
     position: fixed;
     pointer-events: none;
@@ -25,21 +36,56 @@
     color: var(--tooltip-text);
     padding: 2px 6px;
     font-size: 12px;
-    font-family: monospace;
+    font-family: var(--font-mono);
     border-radius: 3px;
     white-space: nowrap;
     z-index: 2147483647;
 }
 
+/* --- The Main Popup Box --- */
 .inspector-popup {
     position: fixed;
     background-color: var(--popup-bg);
-    width: 200px;
-    height: 150px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--popup-border);
     box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     border-radius: 6px;
     display: none;
     z-index: 2147483647;
     padding: 10px;
+    width: 280px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: sans-serif;
+    font-size: 13px;
+}
+
+/* --- Popup Content Styling (New) --- */
+.inspector-header {
+    font-weight: bold;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    color: var(--text-primary);
+}
+
+.inspector-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+    border-bottom: 1px solid #f9f9f9;
+}
+
+.prop-name {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.prop-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
 }
