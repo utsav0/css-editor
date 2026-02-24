@@ -114,7 +114,68 @@ async function initCSSHarvester() {
 }
 
 // ==========================================
-// 3. THE GENERATOR (DevTools-like Output)
+// 3. INJECTED <style> OVERRIDE ENGINE
+// ==========================================
+const overrides = {}; // { "selector": { "prop": "value" } }
+let overrideStyleEl = null;
+
+function getOverrideStyleEl() {
+    if (!overrideStyleEl) {
+        overrideStyleEl = document.createElement('style');
+        overrideStyleEl.id = 'css-editor-overrides';
+        document.head.appendChild(overrideStyleEl);
+    }
+    return overrideStyleEl;
+}
+
+function rebuildOverrideStyles() {
+    const el = getOverrideStyleEl();
+    let css = '';
+    for (const [selector, props] of Object.entries(overrides)) {
+        const declarations = Object.entries(props)
+            .filter(([p, v]) => p.trim() && v.trim())
+            .map(([p, v]) => `  ${p}: ${v} !important;`)
+            .join('\n');
+        if (declarations) {
+            css += `${selector} {\n${declarations}\n}\n`;
+        }
+    }
+    el.textContent = css;
+}
+
+function setOverride(selector, prop, value) {
+    if (!overrides[selector]) overrides[selector] = {};
+    if (value.trim()) {
+        overrides[selector][prop] = value;
+    } else {
+        delete overrides[selector][prop];
+    }
+    rebuildOverrideStyles();
+}
+
+function removeOverride(selector, prop) {
+    if (overrides[selector]) {
+        delete overrides[selector][prop];
+        if (Object.keys(overrides[selector]).length === 0) {
+            delete overrides[selector];
+        }
+    }
+    rebuildOverrideStyles();
+}
+
+function renameOverrideProp(selector, oldProp, newProp) {
+    if (overrides[selector] && overrides[selector][oldProp] !== undefined) {
+        const val = overrides[selector][oldProp];
+        delete overrides[selector][oldProp];
+        if (newProp.trim()) {
+            overrides[selector][newProp] = val;
+        }
+    }
+    rebuildOverrideStyles();
+}
+
+// ==========================================
+// 4. THE GENERATOR (DevTools-like Output)
 // ==========================================
 function getFinalCSS(element) {
     if (!window.CSS_DB) return "<div>Loading...</div>";
@@ -178,6 +239,8 @@ function renderRuleBlock(selector, styles, source, winningProp, ruleIndex) {
     const entries = Object.entries(styles);
     if (entries.length === 0) return '';
 
+    const isEditable = selector !== 'element.style';
+
     let propsHTML = '';
     entries.forEach(([prop, val]) => {
         const cleanVal = utils.rgbToHex(val);
@@ -190,7 +253,17 @@ function renderRuleBlock(selector, styles, source, winningProp, ruleIndex) {
             propsHTML += `<span style="color:#d4d4d4">: </span>`;
             propsHTML += `<span style="color:#ce9178">${utils.escapeHTML(cleanVal)}</span>`;
             propsHTML += `<span style="color:#d4d4d4">;</span></div>`;
+        } else if (isEditable) {
+            // Editable row – contenteditable name & value
+            propsHTML += `<div style="line-height:1.7;padding-left:16px;display:flex;align-items:baseline;" data-selector="${utils.escapeHTML(selector)}" data-prop="${utils.escapeHTML(prop)}">`;
+            propsHTML += `<span contenteditable="true" spellcheck="false" style="color:#9cdcfe;outline:none;min-width:8px;" data-role="name" data-original="${utils.escapeHTML(prop)}">${utils.escapeHTML(prop)}</span>`;
+            propsHTML += `<span style="color:#d4d4d4;flex-shrink:0">: </span>`;
+            propsHTML += `<span contenteditable="true" spellcheck="false" style="color:#ce9178;outline:none;min-width:8px;flex:1;word-break:break-all;" data-role="value" data-original="${utils.escapeHTML(cleanVal)}">${utils.escapeHTML(cleanVal)}</span>`;
+            propsHTML += `<span style="color:#d4d4d4;flex-shrink:0">;</span>`;
+            propsHTML += `<span data-role="delete" style="color:#555;margin-left:6px;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .15s;flex-shrink:0" onmouseenter="this.style.opacity='1';this.style.color='#f44336'" onmouseleave="this.style.opacity='0';this.style.color='#555'" title="Remove">×</span>`;
+            propsHTML += `</div>`;
         } else {
+            // Non-editable (inline styles block)
             propsHTML += `<div style="line-height:1.6;padding-left:16px;">`;
             propsHTML += `<span style="color:#9cdcfe">${utils.escapeHTML(prop)}</span>`;
             propsHTML += `<span style="color:#d4d4d4">: </span>`;
@@ -199,26 +272,49 @@ function renderRuleBlock(selector, styles, source, winningProp, ruleIndex) {
         }
     });
 
+    // Render any NEW overrides for this selector (properties user added that weren't in original)
+    if (isEditable && overrides[selector]) {
+        for (const [prop, val] of Object.entries(overrides[selector])) {
+            if (!styles.hasOwnProperty(prop)) {
+                propsHTML += `<div style="line-height:1.7;padding-left:16px;display:flex;align-items:baseline;" data-selector="${utils.escapeHTML(selector)}" data-prop="${utils.escapeHTML(prop)}">`;
+                propsHTML += `<span contenteditable="true" spellcheck="false" style="color:#73c991;outline:none;min-width:8px;" data-role="name" data-original="${utils.escapeHTML(prop)}">${utils.escapeHTML(prop)}</span>`;
+                propsHTML += `<span style="color:#d4d4d4;flex-shrink:0">: </span>`;
+                propsHTML += `<span contenteditable="true" spellcheck="false" style="color:#73c991;outline:none;min-width:8px;flex:1;word-break:break-all;" data-role="value" data-original="${utils.escapeHTML(val)}">${utils.escapeHTML(val)}</span>`;
+                propsHTML += `<span style="color:#d4d4d4;flex-shrink:0">;</span>`;
+                propsHTML += `<span data-role="delete" style="color:#555;margin-left:6px;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .15s;flex-shrink:0" onmouseenter="this.style.opacity='1';this.style.color='#f44336'" onmouseleave="this.style.opacity='0';this.style.color='#555'" title="Remove">×</span>`;
+                propsHTML += `</div>`;
+            }
+        }
+    }
+
     const safeSelector = utils.escapeHTML(selector);
     const sourceLabel = source
         ? `<div style="font-size:11px;color:#888;font-style:italic;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${utils.escapeHTML(source)}</div>`
         : '';
 
+    // "+ add property" button for editable blocks
+    const addBtn = isEditable
+        ? `<div data-role="add" data-selector="${safeSelector}" style="padding:2px 16px;color:#555;font-size:11px;cursor:pointer;user-select:none;transition:color .15s" onmouseenter="this.style.color='#9cdcfe'" onmouseleave="this.style.color='#555'">+ add property</div>`
+        : '';
+
     return `
-        <div style="padding:6px 12px;border-bottom:1px solid #2d2d2d;">
+        <div style="padding:6px 12px;border-bottom:1px solid #2d2d2d;" data-block-selector="${safeSelector}">
             ${sourceLabel}
             <div style="color:#d7ba7d">${safeSelector} <span style="color:#d4d4d4">{</span></div>
-            ${propsHTML}
+            <div data-role="props-container" data-selector="${safeSelector}">
+                ${propsHTML}
+            </div>
+            ${addBtn}
             <div style="color:#d4d4d4">}</div>
         </div>
     `;
 }
 
 // ==========================================
-// 4. THE UI (Hover & Click)
+// 5. THE UI (Hover & Click)
 // ==========================================
 let shadow, inspOverlay, popup, host, activeElement;
-let isFrozen = false;
+
 
 function initUI() {
     if (document.getElementById('css-inspector-host')) return;
@@ -254,6 +350,133 @@ function initUI() {
 
     shadow.appendChild(inspOverlay);
     shadow.appendChild(popup);
+
+    // -------------------------------------------------------
+    // Delegated event listeners inside shadow DOM popup
+    // -------------------------------------------------------
+
+    // CLICK: "add property" and "delete" buttons
+    popup.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't let clicks inside popup dismiss it
+
+        const target = e.target;
+
+        // --- Delete button ---
+        if (target.dataset.role === 'delete') {
+            const row = target.parentElement;
+            if (!row) return;
+            const selector = row.dataset.selector;
+            const nameSpan = row.querySelector('[data-role="name"]');
+            if (nameSpan) {
+                removeOverride(selector, nameSpan.textContent.trim());
+            }
+            row.remove();
+            return;
+        }
+
+        // --- Add property button ---
+        if (target.dataset.role === 'add') {
+            const selector = target.dataset.selector;
+            // Find the props container right before this button
+            const block = target.closest('[data-block-selector]');
+            const propsContainer = block ? block.querySelector('[data-role="props-container"]') : null;
+            if (!propsContainer) return;
+
+            const newRow = document.createElement('div');
+            newRow.style.cssText = 'line-height:1.7;padding-left:16px;display:flex;align-items:baseline;';
+            newRow.dataset.selector = selector;
+            newRow.dataset.prop = '';
+
+            newRow.innerHTML = `
+                <span contenteditable="true" spellcheck="false" style="color:#73c991;outline:none;min-width:8px;" data-role="name" data-original=""></span><span style="color:#d4d4d4;flex-shrink:0">: </span><span contenteditable="true" spellcheck="false" style="color:#73c991;outline:none;min-width:8px;flex:1;word-break:break-all;" data-role="value" data-original=""></span><span style="color:#d4d4d4;flex-shrink:0">;</span><span data-role="delete" style="color:#555;margin-left:6px;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .15s;flex-shrink:0" onmouseenter="this.style.opacity='1';this.style.color='#f44336'" onmouseleave="this.style.opacity='0';this.style.color='#555'" title="Remove">×</span>
+            `;
+            propsContainer.appendChild(newRow);
+            newRow.querySelector('[data-role="name"]').focus();
+            return;
+        }
+    });
+
+    // INPUT: live editing of property names & values
+    popup.addEventListener('input', (e) => {
+        const target = e.target;
+        const row = target.closest('[data-selector]');
+        if (!row || !row.dataset.selector) return;
+
+        const selector = row.dataset.selector;
+        const nameSpan = row.querySelector('[data-role="name"]');
+        const valueSpan = row.querySelector('[data-role="value"]');
+        if (!nameSpan || !valueSpan) return;
+
+        const currentProp = nameSpan.textContent.trim();
+        const currentVal = valueSpan.textContent.trim();
+
+        if (target.dataset.role === 'value') {
+            // Value changed — apply override
+            if (currentProp) {
+                setOverride(selector, currentProp, currentVal);
+            }
+        } else if (target.dataset.role === 'name') {
+            // Prop name changed — rename
+            const oldProp = row.dataset.prop || nameSpan.dataset.original || '';
+            if (oldProp !== currentProp) {
+                renameOverrideProp(selector, oldProp, currentProp);
+                row.dataset.prop = currentProp;
+                if (currentProp && currentVal) {
+                    setOverride(selector, currentProp, currentVal);
+                }
+            }
+        }
+    });
+
+    // FOCUS: highlight the editable span
+    popup.addEventListener('focusin', (e) => {
+        if (e.target.contentEditable === 'true') {
+            e.target.style.background = 'rgba(255,255,255,0.06)';
+            e.target.style.borderRadius = '2px';
+            e.target.style.boxShadow = '0 0 0 1px rgba(100,149,237,0.5)';
+        }
+    });
+    popup.addEventListener('focusout', (e) => {
+        if (e.target.contentEditable === 'true') {
+            e.target.style.background = '';
+            e.target.style.boxShadow = '';
+        }
+    });
+
+    // KEYDOWN: Tab between name/value, Enter to confirm
+    popup.addEventListener('keydown', (e) => {
+        const target = e.target;
+        const row = target.closest('[data-selector]');
+        if (!row) return;
+
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            if (target.dataset.role === 'name') {
+                const val = row.querySelector('[data-role="value"]');
+                if (val) val.focus();
+            } else if (target.dataset.role === 'value') {
+                // Move to next row's name, or trigger add
+                const nextRow = row.nextElementSibling;
+                if (nextRow && nextRow.querySelector('[data-role="name"]')) {
+                    nextRow.querySelector('[data-role="name"]').focus();
+                } else {
+                    const block = row.closest('[data-block-selector]');
+                    const addBtn = block ? block.querySelector('[data-role="add"]') : null;
+                    if (addBtn) addBtn.click();
+                }
+            }
+        }
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (target.dataset.role === 'name') {
+                const val = row.querySelector('[data-role="value"]');
+                if (val) val.focus();
+            } else {
+                target.blur();
+            }
+        }
+    });
 }
 
 // --- Run Init ---
@@ -290,6 +513,10 @@ document.addEventListener('scroll', () => {
 document.addEventListener('click', (e) => {
     if (e.target === host) return;
 
+    // If click is inside our shadow DOM popup, ignore
+    const path = e.composedPath();
+    if (path.includes(popup)) return;
+
     if (isFrozen) {
         // Unfreeze
         isFrozen = false;
@@ -305,12 +532,12 @@ document.addEventListener('click', (e) => {
 
             // 1. Generate content and render it (so we can measure it)
             popup.innerHTML = getFinalCSS(activeElement);
-            popup.style.display = 'block'; 
+            popup.style.display = 'block';
 
             // 2. Measure the popup and the viewport
             const popupRect = popup.getBoundingClientRect();
             const offset = 15; // Distance from the cursor
-            
+
             let top = e.clientY + offset;
             let left = e.clientX + offset;
 
@@ -318,16 +545,16 @@ document.addEventListener('click', (e) => {
             if (left + popupRect.width > window.innerWidth) {
                 // Flip to the left side of the cursor
                 left = e.clientX - popupRect.width - offset;
-                
+
                 // Fallback: If it's so wide it now bleeds off the left edge, pin it to the left screen edge
-                if (left < 0) left = offset; 
+                if (left < 0) left = offset;
             }
 
             // 4. Check Bottom Boundary
             if (top + popupRect.height > window.innerHeight) {
                 // Flip to above the cursor
                 top = e.clientY - popupRect.height - offset;
-                
+
                 // Fallback: If it's so tall it now bleeds off the top edge, pin it to the top screen edge
                 if (top < 0) top = offset;
             }

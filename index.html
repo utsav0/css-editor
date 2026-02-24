@@ -6,12 +6,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
     <style>
-        body, html {
+
+
+        body,
+        html {
             display: grid;
             place-items: center;
             min-height: 700px;
             background-color: #01072b;
             color: #eaeaec;
+
+            /* Just a comment */
+
+            color: red;
         }
 
         .cont {
@@ -22,7 +29,15 @@
             background-color: #444;
             display: flex;
             gap: 10px;
-
+        }
+        .cont {
+            width: 500px;
+            height: 200px;
+            border-radius: 10px;
+            padding: 10px;
+            background-color: #444;
+            display: flex;
+            gap: 10px;
         }
 
         .box {
@@ -32,6 +47,8 @@
             border: 10px;
         }
     </style>
+    <!-- Just a sample external style to validate -->
+    <link rel="stylesheet" href="external.css">
 
 </head>
 
@@ -41,14 +58,8 @@
         <div class="box"></div>
         <div class="box"></div>
     </div>
-
-
-
-    <script src="content.js"></script>
-    <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="styles2.css">
-
-   
+    <!-- The main extension layout and script -->
+    <script src="content2.js"></script>
 </body>
 
 </html>
