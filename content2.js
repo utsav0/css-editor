@@ -1,9 +1,16 @@
-let shadow, inspOverlay, popup, host, hoveredEle;
-let isFrozen = false; // Frozen = When user clicked an element & popup opened
-let globalRuleId = 0;
-const changeLog = []; // [{type: "", source: "", selector: "", oldCode: "", newCode: ""}, ...]
+// ============================================================
+// 1. STATE
+// ============================================================
 
-// Create UI Elements
+let shadow, inspOverlay, overlayTargetName, popup, host, hoveredEle;
+let isFrozen = false;
+let globalRuleId = 0;
+const changeLog = [];
+
+// ============================================================
+// 2. DOM SETUP
+// ============================================================
+
 function initUI() {
     if (document.getElementById('css-inspector-host')) return;
 
@@ -19,291 +26,491 @@ function initUI() {
 
     inspOverlay = document.createElement('div');
     inspOverlay.className = 'insp-overlay';
+
     overlayTargetName = document.createElement('div');
     overlayTargetName.className = 'overlay__target-name';
+
     popup = document.createElement('div');
     popup.className = 'insp-popup';
-
 
     shadow.appendChild(link);
     shadow.appendChild(inspOverlay);
     inspOverlay.appendChild(overlayTargetName);
     shadow.appendChild(popup);
 }
+
 initUI();
 
-function showOverlayOver(element) {
-    hoveredEle = element.target;
-    const hoveredElePosition = hoveredEle.getBoundingClientRect();
-    inspOverlay.style.width = `${hoveredElePosition.width}px`;
-    inspOverlay.style.height = `${hoveredElePosition.height}px`;
-    inspOverlay.style.top = `${hoveredElePosition.top}px`;
-    inspOverlay.style.left = `${hoveredElePosition.left}px`;
-    inspOverlay.style.display = 'block';
+// ============================================================
+// 3. OVERLAY
+// ============================================================
 
-    overlayTargetName.textContent = hoveredEle.tagName.toLowerCase() + (hoveredEle.id ? `#${hoveredEle.id}` : '') + (hoveredEle.className ? `.${hoveredEle.className.split(' ').join('.')}` : '');
+function refreshOverlay(element) {
+    if (!element) return;
+    hoveredEle = element;
+
+    const rect = element.getBoundingClientRect();
+    Object.assign(inspOverlay.style, {
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        top: `${rect.top}px`,
+        left: `${rect.left}px`,
+        display: 'block',
+    });
+
+    const id = element.id ? `#${element.id}` : '';
+    const cls = element.className
+        ? `.${String(element.className).split(' ').filter(Boolean).join('.')}`
+        : '';
+    overlayTargetName.textContent = element.tagName.toLowerCase() + id + cls;
+
     overlayTargetName.classList.remove('overflowing');
-
-    // Check if target content name overflows viewport
-    const rect = overlayTargetName.getBoundingClientRect();
-    const isOutsideViewport =
-        rect.left < 0 ||
-        rect.top < 0 ||
-        rect.right > window.innerWidth ||
-        rect.bottom > window.innerHeight;
-    overlayTargetName.classList.toggle('overflowing', isOutsideViewport);
+    const labelRect = overlayTargetName.getBoundingClientRect();
+    const isOutside =
+        labelRect.left < 0 ||
+        labelRect.top < 0 ||
+        labelRect.right > window.innerWidth ||
+        labelRect.bottom > window.innerHeight;
+    overlayTargetName.classList.toggle('overflowing', isOutside);
 }
 
-// Parse and handle CSS
+// ============================================================
+// 4. CSS HARVESTER
+// ============================================================
+
 function getSheetSource(sheet) {
     if (sheet.href) {
         try {
-            const url = new URL(sheet.href);
-            return url.pathname.split('/').pop() || sheet.href;
+            return new URL(sheet.href).pathname.split('/').pop() || sheet.href;
         } catch {
             return sheet.href;
         }
     }
-    if (sheet.ownerNode && sheet.ownerNode.tagName === 'STYLE') {
-        return 'inline';
-    }
+    if (sheet.ownerNode?.tagName === 'STYLE') return 'inline';
     return 'unknown';
+}
+
+function parseRawCssText(cssText) {
+    const decls = [];
+    let propId = 0;
+
+    for (const segment of cssText.split(';')) {
+        const trimmed = segment.trim();
+        if (!trimmed) continue;
+
+        const colonIdx = trimmed.indexOf(':');
+        if (colonIdx === -1) continue;
+
+        const prop = trimmed.substring(0, colonIdx).trim();
+        const val = trimmed.substring(colonIdx + 1).trim();
+        if (prop && val) {
+            decls.push({ id: propId++, prop, val });
+        }
+    }
+
+    return decls;
+}
+
+function buildRuleEntry(selector, cssText, source) {
+    return {
+        id: globalRuleId++,
+        isEdited: false,
+        selector,
+        styles: parseRawCssText(cssText),
+        source,
+    };
 }
 
 async function initCSSHarvester() {
     const cssStore = [];
 
-    function parseRawCssText(cssText) {
-        const obj = [];
-        let propId = 0;
-        cssText.split(';').forEach(decl => {
-            if (!decl.trim()) return;
-            const firstColon = decl.indexOf(':');
-            if (firstColon > -1) {
-                const prop = decl.substring(0, firstColon).trim();
-                const val = decl.substring(firstColon + 1).trim();
-                if (prop && val) {
-                    obj.push({
-                        id: propId++,
-                        prop: prop,
-                        val: val
-                    });
+    for (const sheet of Array.from(document.styleSheets)) {
+        const source = getSheetSource(sheet);
+
+        try {
+            const rules = sheet.cssRules || sheet.rules;
+            if (!rules) continue;
+
+            for (const rule of Array.from(rules)) {
+                if (rule.type === CSSRule.STYLE_RULE) {
+                    cssStore.push(buildRuleEntry(rule.selectorText, rule.style.cssText, source));
                 }
             }
-        });
-        return obj;
-    }
-
-    const sheets = Array.from(document.styleSheets);
-
-    for (const sheet of sheets) {
-        const source = getSheetSource(sheet);
-        try {
-            // METHOD A: Direct DOM Access
-            const rules = sheet.cssRules || sheet.rules;
-            if (rules) {
-                Array.from(rules).forEach(rule => {
-                    if (rule.type === 1) { // 1 = CSSStyleRule
-                        cssStore.push({
-                            id: globalRuleId++,
-                            isEdited: false,
-                            selector: rule.selectorText,
-                            styles: parseRawCssText(rule.style.cssText),
-                            source: source,
-                        });
+        } catch {
+            // CORS-blocked sheet — fetch as text
+            if (!sheet.href) continue;
+            try {
+                const text = await (await fetch(sheet.href)).text();
+                const regex = /([^{]+)\{([^}]+)\}/g;
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    const sel = match[1].trim();
+                    if (!sel.startsWith('@') && !sel.startsWith('/')) {
+                        cssStore.push(buildRuleEntry(sel, match[2], source));
                     }
-                });
-            }
-        } catch (e) {
-            // METHOD B: CORS Fallback
-            if (sheet.href) {
-                try {
-                    const res = await fetch(sheet.href);
-                    const text = await res.text();
-                    const regex = /([^{]+)\{([^}]+)\}/g;
-                    let match;
-                    while ((match = regex.exec(text)) !== null) {
-                        const sel = match[1].trim();
-                        if (!sel.startsWith('@') && !sel.startsWith('/')) {
-                            cssStore.push({
-                                id: globalRuleId++,
-                                isEdited: false,
-                                selector: sel,
-                                styles: parseRawCssText(match[2]),
-                                source: source,
-                            });
-                        }
-                    }
-                } catch (err) { console.log("Skipped:", sheet.href); }
+                }
+            } catch {
+                console.warn('Skipped stylesheet:', sheet.href);
             }
         }
     }
 
     window.CSS_DB = cssStore;
 }
+
 initCSSHarvester();
 
-function getFinalCSS(element) {
-    if (!window.CSS_DB) return "<div class='css-group__content'>Loading...</div>";
+// ============================================================
+// 5. HTML RENDERER
+// ============================================================
 
-    const matchedCSS = window.CSS_DB.filter(rule => {
+function renderDeclaration(styleObj) {
+    return `
+        <div class="css-rule__declaration">
+            <span class="css-rule__property" contenteditable="plaintext-only"
+                  data-type="property" data-decl-id="${styleObj.id}">${styleObj.prop}</span><span
+                  class="css-rule__colon css-rule__delimiter">: </span><span
+                  class="css-rule__value" contenteditable="plaintext-only"
+                  data-type="value" data-decl-id="${styleObj.id}">${styleObj.val}</span><span
+                  class="css-rule__semicolon css-rule__delimiter">;</span>
+        </div>`;
+}
+
+function renderRule(rule, source) {
+    const declsHTML = rule.styles.map(renderDeclaration).join('');
+    return `
+        <div class="css-rule" data-rule-id="${rule.id}">
+            <div class="css-rule__selector">
+                <span contenteditable="plaintext-only" data-type="selector">${rule.selector}</span>
+                <span class="css-rule__bracket css-rule__delimiter">{</span>
+            </div>
+            <div class="css-rule__body">${declsHTML}</div>
+            <div class="css-rule__add-prop"
+                 data-selector="${rule.selector}"
+                 data-source="${source}">+ add property</div>
+            <div class="css-rule__bracket css-rule__delimiter">}</div>
+        </div>`;
+}
+
+function getFinalCSS(element) {
+    if (!window.CSS_DB) return `<div class="css-group__content">Loading...</div>`;
+
+    const matched = window.CSS_DB.filter(rule => {
         try { return element.matches(rule.selector); } catch { return false; }
     });
 
-    if (matchedCSS.length === 0) {
-        return "<div class='css-group__content'>No CSS rules found for this element.</div>";
+    if (matched.length === 0) {
+        return `<div class="css-group__content">No CSS rules found for this element.</div>`;
     }
 
-    // 2. Group rules by their source
-    const groupedCSS = {};
-    matchedCSS.forEach(rule => {
-        if (!groupedCSS[rule.source]) {
-            groupedCSS[rule.source] = [];
-        }
-        groupedCSS[rule.source].push(rule);
-    });
+    // Group by source
+    const grouped = {};
+    for (const rule of matched) {
+        (grouped[rule.source] ??= []).push(rule);
+    }
 
     let html = '';
-    for (const source in groupedCSS) {
+    for (const [source, rules] of Object.entries(grouped)) {
         html += `
             <div class="css-group">
                 <div class="css-group__header">${source}</div>
                 <div class="css-group__content">
-        `;
-
-        groupedCSS[source].forEach(rule => {
-            html += `
-                    <div class="css-rule" data-rule-id="${rule.id}">
-                        <div class="css-rule__selector"><span contenteditable="plaintext-only" data-type="selector">${rule.selector}</span> <span class="css-rule__bracket css-rule__delimiter">{</span></div>
-                        <div class="css-rule__body">
-            `;
-
-            rule.styles.forEach(styleObj => {
-                html += `
-                    <div class="css-rule__declaration">
-                        <span class="css-rule__property" contenteditable="plaintext-only" data-type="property" data-decl-id="${styleObj.id}">${styleObj.prop}</span><span class="css-rule__colon css-rule__delimiter">: </span><span class="css-rule__value" contenteditable="plaintext-only" data-type="value" data-decl-id="${styleObj.id}">${styleObj.val}</span><span class="css-rule__semicolon css-rule__delimiter">;</span>
-                    </div>
-                `;
-            });
-            html += `
-        </div>
-        <div class="css-rule__add-prop"
-             data-selector="${rule.selector}" 
-             data-source="${source}">+ add property</div>
-        <div class="css-rule__bracket css-rule__delimiter">}</div>
-    </div>
-`;
-
-        });
-
-        html += `
+                    ${rules.map(r => renderRule(r, source)).join('')}
                 </div>
-            </div>
-        `;
+            </div>`;
     }
 
     return html;
 }
 
-document.addEventListener('mousemove', (element) => {
-    if (isFrozen || element.target === host) return;
-    showOverlayOver(element);
+// ============================================================
+// 6. STYLE APPLICATION (Override Engine)
+// ============================================================
+
+function getOrCreateOverrideStyle() {
+    let el = document.getElementById('css-editor-overrides');
+    if (!el) {
+        el = document.createElement('style');
+        el.id = 'css-editor-overrides';
+        document.head.appendChild(el);
+    }
+    return el;
+}
+
+function findCompanion(change, targetType) {
+    return changeLog.find(
+        c => c.ruleId === change.ruleId
+            && c.declId == change.declId
+            && c.type === targetType
+    );
+}
+
+function buildDeclCSS(change, originalRule) {
+    const declObj = originalRule.styles.find(s => s.id === parseInt(change.declId));
+    if (!declObj) return '';
+
+    switch (change.type) {
+        case 'property': {
+            const companionVal = findCompanion(change, 'value');
+            const val = companionVal ? companionVal.newValue : declObj.val;
+            return change.newValue + ':' + val + ';';
+        }
+        case 'value': {
+            // If property is also changed, the property case already handles both
+            if (findCompanion(change, 'property')) return '';
+            return declObj.prop + ':' + change.newValue + ';';
+        }
+        default:
+            return '';
+    }
+}
+
+function updateStyles() {
+    const style = getOrCreateOverrideStyle();
+
+    if (changeLog.length === 0) {
+        style.textContent = '';
+        return;
+    }
+
+    let css = '';
+
+    for (const change of changeLog) {
+        const rule = window.CSS_DB?.find(r => r.id === change.ruleId);
+        if (!rule) continue;
+
+        switch (change.type) {
+            case 'selector': {
+                const decls = rule.styles.map(d => d.prop + ':' + d.val + ';').join('');
+                css += change.newValue + '{' + decls + '}';
+                break;
+            }
+            case 'property':
+            case 'value': {
+                const declCSS = buildDeclCSS(change, rule);
+                if (declCSS) {
+                    css += change.ruleSelector + '{' + declCSS + '}';
+                }
+                break;
+            }
+            case 'new decl': {
+                if (change.newProp && change.newVal) {
+                    css += change.ruleSelector + '{' + change.newProp + ':' + change.newVal + ';}';
+                }
+                break;
+            }
+        }
+    }
+
+    style.textContent = css;
+
+    if (isFrozen && hoveredEle) {
+        refreshOverlay(hoveredEle);
+    }
+}
+
+// ============================================================
+// 7. CHANGE RECORDING
+// ============================================================
+
+function findChangeEntry(ruleId, declId, type) {
+    return changeLog.findIndex(
+        c => c.ruleId === ruleId && c.declId == declId && c.type === type
+    );
+}
+
+function recordNewDecl(target, ruleId, ruleSelector, ruleSource) {
+    const declId = target.dataset.declId;
+    const row = target.closest('.css-rule__declaration');
+    if (!row) return;
+
+    const propText = row.querySelector('.css-rule__property')?.textContent.trim();
+    const valText = row.querySelector('.css-rule__value')?.textContent.trim();
+
+    // Both halves must be present for a valid declaration
+    if (!propText || !valText) return;
+
+    const idx = findChangeEntry(ruleId, declId, 'new decl');
+    if (idx !== -1) {
+        changeLog[idx].newProp = propText;
+        changeLog[idx].newVal = valText;
+        changeLog[idx].ruleSelector = ruleSelector;
+    } else {
+        changeLog.push({
+            ruleId, declId,
+            type: 'new decl',
+            newProp: propText,
+            newVal: valText,
+            ruleSelector, ruleSource,
+        });
+    }
+    updateStyles();
+}
+
+function getOriginalValue(ruleObj, type, declId) {
+    switch (type) {
+        case 'selector': return ruleObj.selector;
+        case 'property': return ruleObj.styles.find(s => s.id == declId)?.prop;
+        case 'value': return ruleObj.styles.find(s => s.id == declId)?.val;
+        default: return undefined;
+    }
+}
+
+function recordChange(target) {
+    if (!target?.isContentEditable) return;
+
+    const ruleContainer = target.closest('.css-rule');
+    if (!ruleContainer) return;
+
+    const ruleId = parseInt(ruleContainer.dataset.ruleId);
+    const newValue = target.textContent;
+    const type = target.dataset.type;
+
+    const ruleObj = window.CSS_DB?.find(r => r.id === ruleId);
+    if (!ruleObj) return;
+
+    const ruleSelector = ruleObj.selector;
+    const ruleSource = ruleObj.source;
+
+    // New declarations have their own path
+    if (type === 'new decl') {
+        recordNewDecl(target, ruleId, ruleSelector, ruleSource);
+        return;
+    }
+
+    const declId = type !== 'selector' ? target.dataset.declId : -1;
+    const oldValue = getOriginalValue(ruleObj, type, declId);
+    if (oldValue === undefined) return;
+
+    const idx = findChangeEntry(ruleId, declId, type);
+
+    // No existing entry and value unchanged → nothing to do
+    if (idx === -1 && oldValue == newValue) return;
+
+    if (idx !== -1) {
+        if (oldValue == newValue) {
+            // Reverted to original → remove entirely
+            changeLog.splice(idx, 1);
+        } else {
+            changeLog[idx].newValue = newValue;
+            changeLog[idx].ruleSelector = ruleSelector;
+        }
+    } else {
+        changeLog.push({
+            ruleId, declId, type,
+            newValue, oldValue,
+            ruleSelector, ruleSource,
+        });
+    }
+
+    updateStyles();
+}
+
+// ============================================================
+// 8. EVENT LISTENERS — Document Level
+// ============================================================
+
+document.addEventListener('mousemove', (e) => {
+    if (isFrozen || e.target === host) return;
+    refreshOverlay(e.target);
 });
 
-// Update overlay position with the scroll
 document.addEventListener('scroll', () => {
-    if (inspOverlay.style.display === 'block') {
-        showOverlayOver({ target: hoveredEle });
+    if (hoveredEle && inspOverlay.style.display === 'block') {
+        refreshOverlay(hoveredEle);
     }
 });
 
 document.addEventListener('click', (e) => {
-
-    const targetEle = e.target;
-    if (targetEle === host) return;
-
-    const path = e.composedPath();
-    if (path.includes(popup)) return;
+    if (e.target === host) return;
+    if (e.composedPath().includes(popup)) return;
 
     if (isFrozen) {
         isFrozen = false;
         popup.style.display = 'none';
         inspOverlay.style.display = 'none';
         e.preventDefault();
-    } else {
-        if (targetEle) {
-            e.preventDefault();
-            e.stopPropagation();
-            isFrozen = true;
-
-            popup.innerHTML = getFinalCSS(targetEle);
-
-            popup.style.display = 'block';
-
-            // Avoid overflowing
-            const popupRect = popup.getBoundingClientRect();
-            const offset = 15;
-
-            let top = e.clientY + offset;
-            let left = e.clientX + offset;
-
-            // 3. Check Right Boundary
-            if (left + popupRect.width > window.innerWidth) {
-                // Flip to the left side of the cursor
-                left = e.clientX - popupRect.width - offset;
-
-                // Fallback: If it's so wide it now bleeds off the left edge, pin it to the left screen edge
-                if (left < 0) left = offset;
-            }
-
-            // 4. Check Bottom Boundary
-            if (top + popupRect.height > window.innerHeight) {
-                // Flip to above the cursor
-                top = e.clientY - popupRect.height - offset;
-
-                // Fallback: If it's so tall it now bleeds off the top edge, pin it to the top screen edge
-                if (top < 0) top = offset;
-            }
-
-            popup.style.top = `${top}px`;
-            popup.style.left = `${left}px`;
-        }
+        return;
     }
+
+    if (!e.target) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    isFrozen = true;
+
+    popup.innerHTML = getFinalCSS(e.target);
+    popup.style.display = 'block';
+
+    positionPopup(e.clientX, e.clientY);
 }, { capture: true });
 
+// ============================================================
+// 9. POPUP POSITIONING
+// ============================================================
+
+function positionPopup(cursorX, cursorY) {
+    const rect = popup.getBoundingClientRect();
+    const offset = 15;
+
+    let top = cursorY + offset;
+    let left = cursorX + offset;
+
+    if (left + rect.width > window.innerWidth) {
+        left = cursorX - rect.width - offset;
+        if (left < 0) left = offset;
+    }
+
+    if (top + rect.height > window.innerHeight) {
+        top = cursorY - rect.height - offset;
+        if (top < 0) top = offset;
+    }
+
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
+}
+
+// ============================================================
+// 10. EVENT LISTENERS — Popup Level
+// ============================================================
+
+// --- Keyboard navigation ---
 popup.addEventListener('keydown', (e) => {
     const target = e.target;
+    if (!target?.isContentEditable) return;
+
     const isProp = target.classList.contains('css-rule__property');
     const isValue = target.classList.contains('css-rule__value');
-    const isSelector = target.parentElement.classList.contains('css-rule__selector');
+    const isSelector = target.parentElement?.classList.contains('css-rule__selector');
 
     if (isSelector && e.key === 'Enter') {
+        e.preventDefault();
         target.blur();
+        return;
     }
 
     if (isProp && (e.key === ':' || e.key === 'Enter')) {
         e.preventDefault();
-        const valueSpan = target.parentElement.querySelector('.css-rule__value');
+        const valueSpan = target.parentElement?.querySelector('.css-rule__value');
         if (valueSpan) {
             valueSpan.focus();
             document.execCommand('selectAll', false, null);
         }
+        return;
     }
 
     if (isValue && (e.key === ';' || e.key === 'Enter')) {
         e.preventDefault();
-        const currentDeclaration = target.closest('.css-rule__declaration');
-        const nextRow = currentDeclaration.nextElementSibling;
+        const nextRow = target.closest('.css-rule__declaration')?.nextElementSibling;
 
-        if (nextRow && nextRow.classList.contains('css-rule__declaration')) {
+        if (nextRow?.classList.contains('css-rule__declaration')) {
             const nextProp = nextRow.querySelector('.css-rule__property');
             if (nextProp) {
                 nextProp.focus();
                 document.execCommand('selectAll', false, null);
             }
         } else {
-            const ruleContainer = target.closest('.css-rule');
-            const addBtn = ruleContainer ? ruleContainer.querySelector('.css-rule__add-prop') : null;
+            const addBtn = target.closest('.css-rule')?.querySelector('.css-rule__add-prop');
             if (addBtn) {
                 addBtn.click();
             } else {
@@ -313,240 +520,67 @@ popup.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Add new property row ---
 popup.addEventListener('click', (e) => {
-    if (e.target.classList.contains('css-rule__add-prop')) {
-        const btn = e.target;
-        const ruleBody = btn.previousElementSibling;
+    if (!e.target.classList.contains('css-rule__add-prop')) return;
 
-        const lastRow = ruleBody.lastElementChild;
-        if (lastRow && lastRow.classList.contains('css-rule__declaration')) {
-            const p = lastRow.querySelector('.css-rule__property').textContent.trim();
-            const v = lastRow.querySelector('.css-rule__value').textContent.trim();
-            if (!p && !v) {
-                lastRow.querySelector('.css-rule__property').focus();
-                return;
-            }
+    const btn = e.target;
+    const ruleBody = btn.previousElementSibling;
+    if (!ruleBody) return;
+
+    // If last row is already empty, just focus it
+    const lastRow = ruleBody.lastElementChild;
+    if (lastRow?.classList.contains('css-rule__declaration')) {
+        const p = lastRow.querySelector('.css-rule__property')?.textContent.trim();
+        const v = lastRow.querySelector('.css-rule__value')?.textContent.trim();
+        if (!p && !v) {
+            lastRow.querySelector('.css-rule__property')?.focus();
+            return;
         }
-
-
-        let declId = 0;
-        if (lastRow) {
-            const prevSpan = lastRow.querySelector('[data-decl-id]');
-            if (prevSpan && prevSpan.dataset.declId) {
-                declId = parseInt(prevSpan.dataset.declId, 10);
-            }
-        }
-
-        declId++;
-
-        const newRow = document.createElement('div');
-        newRow.className = 'css-rule__declaration';
-        newRow.innerHTML = `
-            <span class="css-rule__property" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">: </span><span class="css-rule__value" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">;</span>
-        `;
-        ruleBody.appendChild(newRow);
-        newRow.querySelector('.css-rule__property').focus();
     }
+
+    // Determine next declId
+    let declId = 0;
+    const prevIdSpan = lastRow?.querySelector('[data-decl-id]');
+    if (prevIdSpan?.dataset.declId) {
+        declId = parseInt(prevIdSpan.dataset.declId, 10);
+    }
+    declId++;
+
+    const newRow = document.createElement('div');
+    newRow.className = 'css-rule__declaration';
+    newRow.innerHTML = `<span class="css-rule__property" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">: </span><span class="css-rule__value" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">;</span>`;
+
+    ruleBody.appendChild(newRow);
+    newRow.querySelector('.css-rule__property')?.focus();
 });
 
-// Removing empty properties on focusout
+// --- Remove empty rows on focusout ---
 popup.addEventListener('focusout', (e) => {
-    const target = e.target;
-    if (!target.isContentEditable) return;
+    if (!e.target?.isContentEditable) return;
     const row = e.target.closest('.css-rule__declaration');
     if (!row) return;
 
     setTimeout(() => {
-        if (!row.contains(shadow.activeElement)) {
-            const p = row.querySelector('.css-rule__property').textContent.trim();
-            const v = row.querySelector('.css-rule__value').textContent.trim();
-            if (!p || !v) {
-                row.remove();
-            }
+        if (row.contains(shadow.activeElement)) return;
+        const p = row.querySelector('.css-rule__property')?.textContent.trim();
+        const v = row.querySelector('.css-rule__value')?.textContent.trim();
+        if (!p || !v) {
+            row.remove();
         }
     }, 10);
-})
+});
 
-function updateStyles() {
-
-    let style = document.getElementById('css-editor-overrides');
-    if (!style) {
-        style = document.createElement('style');
-        style.id = 'css-editor-overrides';
-        document.head.appendChild(style);
-    }
-
-    if (!changeLog || changeLog.length === 0) {
-        style.textContent = '';
-        return;
-    }
-
-
-    let changedCssText = ""
-    for (const change of changeLog) {
-        const originalRuleObj = window.CSS_DB.find(r => r.id === change.ruleId);
-        if (!originalRuleObj) continue;
-        switch (change.type) {
-            case "selector":
-                console.log("adding selector css");
-
-                changedCssText += change.newValue + "{";
-
-                for (const decl of originalRuleObj.styles) {
-                    changedCssText += decl.prop + ":" + decl.val + ";";
-                }
-                console.log(changedCssText);
-
-                break;
-
-            case "property": {
-                changedCssText += change.ruleSelector + "{";
-                const propDeclObj = originalRuleObj.styles.find(
-                    obj => obj.id === parseInt(change.declId)
-                );
-                if (propDeclObj) {
-                    const companionVal = changeLog.find(
-                        c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "value"
-                    );
-                    const val = companionVal ? companionVal.newValue : propDeclObj.val;
-                    changedCssText += change.newValue + ":" + val + ";";
-                }
-                break;
-            }
-
-            case "value": {
-                const companionProp = changeLog.find(
-                    c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "property"
-                );
-                if (companionProp) break;
-
-                changedCssText += change.ruleSelector + "{";
-                const valueDeclObj = originalRuleObj.styles.find(
-                    obj => obj.id === parseInt(change.declId)
-                );
-                if (valueDeclObj) {
-                    changedCssText += valueDeclObj.prop + ":" + change.newValue + ";";
-                }
-                break;
-            }
-            case "new decl":
-
-                changedCssText += change.ruleSelector + "{";
-                if (change.newProp && change.newVal) {
-                    changedCssText += change.newProp + ":" + change.newVal + ";";
-                }
-                break;
-        }
-
-        changedCssText += "}";
-    }
-
-    style.textContent = changedCssText;
-
-    // Refresh overlay to reflect size/position changes
-    if (isFrozen && hoveredEle) {
-        showOverlayOver({ target: hoveredEle });
-    }
-}
-
-function recordChange(target) {
-    if (!target.isContentEditable) return;
-
-    const ruleContainer = target.closest('.css-rule');
-    if (!ruleContainer) return;
-
-    const ruleId = parseInt(ruleContainer.dataset.ruleId);
-    const newValue = target.textContent;
-    const type = target.dataset.type;
-
-    const ruleObj = window.CSS_DB.find(r => r.id === ruleId);
-    if (!ruleObj) return;
-
-    const ruleSelector = ruleObj.selector;
-    const ruleSource = ruleObj.source;
-    let declId = -1;
-    let oldValue;
-
-    switch (type) {
-        case "selector":
-            oldValue = ruleObj.selector;
-            break;
-        case "property":
-            declId = target.dataset.declId;
-            oldValue = ruleObj.styles.find(item => item.id == declId).prop;
-            break;
-        case "value":
-            declId = target.dataset.declId;
-            oldValue = ruleObj.styles.find(item => item.id == declId).val;
-            break;
-        case "new decl": {
-            declId = target.dataset.declId;
-            const row = target.closest('.css-rule__declaration');
-            if (!row) return;
-            const propText = row.querySelector('.css-rule__property').textContent.trim();
-            const valText = row.querySelector('.css-rule__value').textContent.trim();
-
-            if (!propText || !valText) return;
-
-            const existing = changeLog.find(
-                c => c.ruleId === ruleId && c.declId === declId && c.type === "new decl"
-            );
-            if (existing) {
-                existing.newProp = propText;
-                existing.newVal = valText;
-                existing.ruleSelector = ruleSelector;
-            } else {
-                changeLog.push({
-                    ruleId: ruleId,
-                    newProp: propText,
-                    newVal: valText,
-                    type: "new decl",
-                    ruleSelector: ruleSelector,
-                    ruleSource: ruleSource,
-                    declId: declId,
-                });
-            }
-            updateStyles();
-            return;
-        }
-    }
-    if (oldValue == newValue && !changeLog.find(c => c.ruleId === ruleId && c.declId == declId && c.type === type)) return;
-
-    const existingIdx = changeLog.findIndex(
-        c => c.ruleId === ruleId && c.declId == declId && c.type === type
-    );
-
-    if (existingIdx !== -1) {
-        if (oldValue == newValue) {
-            changeLog.splice(existingIdx, 1);
-        } else {
-            changeLog[existingIdx].newValue = newValue;
-            changeLog[existingIdx].ruleSelector = ruleSelector;
-        }
-    } else {
-        if (oldValue == newValue) return;
-        changeLog.push({
-            ruleId: ruleId,
-            newValue: newValue,
-            type: type,
-            ruleSelector: ruleSelector,
-            ruleSource: ruleSource,
-            declId: declId,
-            oldValue: oldValue
-        });
-    }
-    updateStyles();
-}
-
+// --- Record changes on focusout (immediate) ---
 popup.addEventListener('focusout', (e) => {
     recordChange(e.target);
 });
 
+// --- Record changes on input (debounced for live preview) ---
 let inputDebounceTimer = null;
+
 popup.addEventListener('input', (e) => {
-    const targetEl = e.target;
+    const el = e.target;
     clearTimeout(inputDebounceTimer);
-    inputDebounceTimer = setTimeout(() => {
-        recordChange(targetEl);
-    }, 300);
+    inputDebounceTimer = setTimeout(() => recordChange(el), 300);
 });
