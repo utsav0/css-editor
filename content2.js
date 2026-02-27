@@ -369,36 +369,60 @@ popup.addEventListener('focusout', (e) => {
 
 function updateStyles() {
 
-    if (!changeLog || changeLog.length === 0) return;
+    let style = document.getElementById('css-editor-overrides');
+    if (!style) {
+        style = document.createElement('style');
+        style.id = 'css-editor-overrides';
+        document.head.appendChild(style);
+    }
 
-    const style = document.createElement('style');
-    style.id = 'css-editor-overrides';
-    document.head.appendChild(style);
+    if (!changeLog || changeLog.length === 0) {
+        style.textContent = '';
+        return;
+    }
 
 
     let changedCssText = ""
     for (const change of changeLog) {
         const originalRuleObj = window.CSS_DB.find(r => r.id === change.ruleId);
         if (!originalRuleObj) continue;
-        const selectorText = change.ruleSelector + "{";
-        changedCssText += selectorText;
         switch (change.type) {
             case "selector":
+                console.log("adding selector css");
+
+                changedCssText += change.newValue + "{";
+
                 for (const decl of originalRuleObj.styles) {
                     changedCssText += decl.prop + ":" + decl.val + ";";
                 }
+                console.log(changedCssText);
+
                 break;
 
-            case "property":
+            case "property": {
+                changedCssText += change.ruleSelector + "{";
                 const propDeclObj = originalRuleObj.styles.find(
                     obj => obj.id === parseInt(change.declId)
                 );
                 if (propDeclObj) {
-                    changedCssText += change.newValue + ":" + propDeclObj.val + ";";
+                    // Check if the value was also edited for this same decl
+                    const companionVal = changeLog.find(
+                        c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "value"
+                    );
+                    const val = companionVal ? companionVal.newValue : propDeclObj.val;
+                    changedCssText += change.newValue + ":" + val + ";";
                 }
                 break;
+            }
 
-            case "value":
+            case "value": {
+                // If there's also a property change for this decl, skip — the property case already handles the full pair
+                const companionProp = changeLog.find(
+                    c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "property"
+                );
+                if (companionProp) break;
+
+                changedCssText += change.ruleSelector + "{";
                 const valueDeclObj = originalRuleObj.styles.find(
                     obj => obj.id === parseInt(change.declId)
                 );
@@ -406,23 +430,13 @@ function updateStyles() {
                     changedCssText += valueDeclObj.prop + ":" + change.newValue + ";";
                 }
                 break;
+            }
             case "new decl":
 
-                //   ruleId: ruleId,
-                //   newValue: newValue,
-                //   type: type,
-                //   ruleSelector: ruleSelector,
-                //   ruleSource: ruleSource,
-                //   declId: declId,
-                //   oldValue: oldValue
-
-               // const newProp = newRow.querySelector('.css-rule__property').textContent.trim();
-               // const newVal = newRow.querySelector('.css-rule__value').textContent.trim();
-//
-               // if (newProp && newVal) {
-               //     changedCssText += newProp + ":" + newVal + ";";
-               // }
-               // Find how you're gonna handle new properties. and then add the function to show new styles, add isEdited to true and then its implication
+                changedCssText += change.ruleSelector + "{";
+                if (change.newProp && change.newVal) {
+                    changedCssText += change.newProp + ":" + change.newVal + ";";
+                }
                 break;
         }
 
@@ -463,20 +477,62 @@ popup.addEventListener('focusout', (e) => {
             declId = target.dataset.declId;
             oldValue = ruleObj.styles.find(item => item.id == declId).val;
             break;
-        case "new decl":
+        case "new decl": {
             declId = target.dataset.declId;
-            oldValue = "";
-            break;
+            const row = target.closest('.css-rule__declaration');
+            if (!row) return;
+            const propText = row.querySelector('.css-rule__property').textContent.trim();
+            const valText = row.querySelector('.css-rule__value').textContent.trim();
+
+            if (!propText || !valText) return;
+
+            const existing = changeLog.find(
+                c => c.ruleId === ruleId && c.declId === declId && c.type === "new decl"
+            );
+            if (existing) {
+                existing.newProp = propText;
+                existing.newVal = valText;
+                existing.ruleSelector = ruleSelector;
+            } else {
+                changeLog.push({
+                    ruleId: ruleId,
+                    newProp: propText,
+                    newVal: valText,
+                    type: "new decl",
+                    ruleSelector: ruleSelector,
+                    ruleSource: ruleSource,
+                    declId: declId,
+                });
+            }
+            updateStyles();
+            return;
+        }
     }
-    if (oldValue == newValue) return;
-    changeLog.push({
-        ruleId: ruleId,
-        newValue: newValue,
-        type: type,
-        ruleSelector: ruleSelector,
-        ruleSource: ruleSource,
-        declId: declId,
-        oldValue: oldValue
-    });
+    if (oldValue == newValue && !changeLog.find(c => c.ruleId === ruleId && c.declId == declId && c.type === type)) return;
+
+    const existingIdx = changeLog.findIndex(
+        c => c.ruleId === ruleId && c.declId == declId && c.type === type
+    );
+
+    if (existingIdx !== -1) {
+        if (oldValue == newValue) {
+            // Edited back to original — remove the entry entirely
+            changeLog.splice(existingIdx, 1);
+        } else {
+            changeLog[existingIdx].newValue = newValue;
+            changeLog[existingIdx].ruleSelector = ruleSelector;
+        }
+    } else {
+        if (oldValue == newValue) return;
+        changeLog.push({
+            ruleId: ruleId,
+            newValue: newValue,
+            type: type,
+            ruleSelector: ruleSelector,
+            ruleSource: ruleSource,
+            declId: declId,
+            oldValue: oldValue
+        });
+    }
     updateStyles();
 });
