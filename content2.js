@@ -442,6 +442,11 @@ function updateStyles() {
     }
 
     style.textContent = changedCssText;
+
+    // Refresh overlay to reflect size/position changes
+    if (isFrozen && hoveredEle) {
+        showOverlayOver({ target: hoveredEle });
+    }
 }
 
 function recordChange(target) {
