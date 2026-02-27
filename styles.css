@@ -11,7 +11,7 @@
     --overlay-clr__border: #4CAF50;
     --tooltip-clr__bg: #333;
     --tooltip-clr__text: #fff;
-    
+
     --code-clr__bg: #1e1e1e;
     --code-clr__border: #3c3c3c;
     --code-clr__header: #252526;
@@ -143,6 +143,19 @@
 
 .css-rule__colon {
     margin-right: 4px;
+}
+
+.css-rule__add-prop {
+    padding: 2px 16px;
+    color: #555;
+    cursor: pointer;
+    user-select: none;
+    width: fit-content;
+    transition: color 0.5s ease;
+}
+.css-rule__add-prop:hover{
+    color: #777;
+
 }
 
 .css-rule__declaration--overridden {

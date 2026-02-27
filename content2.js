@@ -1,6 +1,7 @@
 let shadow, inspOverlay, popup, host, hoveredEle;
 let isFrozen = false; // Frozen = When user clicked an element & popup opened
-
+let globalRuleId = 0;
+const changeLog = []; // [{type: "", source: "", selector: "", oldCode: "", newCode: ""}, ...]
 
 // Create UI Elements
 function initUI() {
@@ -70,17 +71,24 @@ function getSheetSource(sheet) {
 }
 
 async function initCSSHarvester() {
-    const cssStore = []; // [{selector, styles: {prop: val}, source}, ...]
+    const cssStore = [];
 
     function parseRawCssText(cssText) {
-        const obj = {}; // {prop: val, ...}
+        const obj = [];
+        let propId = 0;
         cssText.split(';').forEach(decl => {
             if (!decl.trim()) return;
             const firstColon = decl.indexOf(':');
             if (firstColon > -1) {
                 const prop = decl.substring(0, firstColon).trim();
                 const val = decl.substring(firstColon + 1).trim();
-                if (prop && val) obj[prop] = val;
+                if (prop && val) {
+                    obj.push({
+                        id: propId++,
+                        prop: prop,
+                        val: val
+                    });
+                }
             }
         });
         return obj;
@@ -89,15 +97,16 @@ async function initCSSHarvester() {
     const sheets = Array.from(document.styleSheets);
 
     for (const sheet of sheets) {
-
         const source = getSheetSource(sheet);
         try {
-            // Try Direct DOM Access
+            // METHOD A: Direct DOM Access
             const rules = sheet.cssRules || sheet.rules;
             if (rules) {
                 Array.from(rules).forEach(rule => {
                     if (rule.type === 1) { // 1 = CSSStyleRule
                         cssStore.push({
+                            id: globalRuleId++,
+                            isEdited: false,
                             selector: rule.selectorText,
                             styles: parseRawCssText(rule.style.cssText),
                             source: source,
@@ -106,7 +115,7 @@ async function initCSSHarvester() {
                 });
             }
         } catch (e) {
-            // CORS Fallback (Fetch raw text)
+            // METHOD B: CORS Fallback
             if (sheet.href) {
                 try {
                     const res = await fetch(sheet.href);
@@ -117,6 +126,8 @@ async function initCSSHarvester() {
                         const sel = match[1].trim();
                         if (!sel.startsWith('@') && !sel.startsWith('/')) {
                             cssStore.push({
+                                id: globalRuleId++,
+                                isEdited: false,
                                 selector: sel,
                                 styles: parseRawCssText(match[2]),
                                 source: source,
@@ -162,24 +173,27 @@ function getFinalCSS(element) {
 
         groupedCSS[source].forEach(rule => {
             html += `
-                    <div class="css-rule">
-                        <div class="css-rule__selector"><span contenteditable>${rule.selector}</span> <span class="css-rule__bracket css-rule__delimiter">{</span></div>
+                    <div class="css-rule" data-rule-id="${rule.id}">
+                        <div class="css-rule__selector"><span contenteditable="plaintext-only" data-type="selector">${rule.selector}</span> <span class="css-rule__bracket css-rule__delimiter">{</span></div>
                         <div class="css-rule__body">
             `;
 
-            for (const [property, value] of Object.entries(rule.styles)) {
+            rule.styles.forEach(styleObj => {
                 html += `
-                            <div class="css-rule__declaration" contenteditable>
-                                <span class="css-rule__property">${property}</span><span class="css-rule__colon css-rule__delimiter">: </span><span class="css-rule__value">${value}</span><span class="css-rule__semicolon css-rule__delimiter">;</span>
-                            </div>
-                `;
-            }
-
-            html += `
-                        </div>
-                        <div class="css-rule__bracket css-rule__delimiter">}</div>
+                    <div class="css-rule__declaration">
+                        <span class="css-rule__property" contenteditable="plaintext-only" data-type="property" data-decl-id="${styleObj.id}">${styleObj.prop}</span><span class="css-rule__colon css-rule__delimiter">: </span><span class="css-rule__value" contenteditable="plaintext-only" data-type="value" data-decl-id="${styleObj.id}">${styleObj.val}</span><span class="css-rule__semicolon css-rule__delimiter">;</span>
                     </div>
-            `;
+                `;
+            });
+            html += `
+        </div>
+        <div class="css-rule__add-prop"
+             data-selector="${rule.selector}" 
+             data-source="${source}">+ add property</div>
+        <div class="css-rule__bracket css-rule__delimiter">}</div>
+    </div>
+`;
+
         });
 
         html += `
@@ -223,6 +237,7 @@ document.addEventListener('click', (e) => {
             isFrozen = true;
 
             popup.innerHTML = getFinalCSS(targetEle);
+
             popup.style.display = 'block';
 
             // Avoid overflowing
@@ -255,3 +270,213 @@ document.addEventListener('click', (e) => {
         }
     }
 }, { capture: true });
+
+popup.addEventListener('keydown', (e) => {
+    const target = e.target;
+    const isProp = target.classList.contains('css-rule__property');
+    const isValue = target.classList.contains('css-rule__value');
+    const isSelector = target.parentElement.classList.contains('css-rule__selector');
+
+    if (isSelector && e.key === 'Enter') {
+        target.blur();
+    }
+
+    if (isProp && (e.key === ':' || e.key === 'Enter')) {
+        e.preventDefault();
+        const valueSpan = target.parentElement.querySelector('.css-rule__value');
+        if (valueSpan) {
+            valueSpan.focus();
+            document.execCommand('selectAll', false, null);
+        }
+    }
+
+    if (isValue && (e.key === ';' || e.key === 'Enter')) {
+        e.preventDefault();
+        const currentDeclaration = target.closest('.css-rule__declaration');
+        const nextRow = currentDeclaration.nextElementSibling;
+
+        if (nextRow && nextRow.classList.contains('css-rule__declaration')) {
+            const nextProp = nextRow.querySelector('.css-rule__property');
+            if (nextProp) {
+                nextProp.focus();
+                document.execCommand('selectAll', false, null);
+            }
+        } else {
+            const ruleContainer = target.closest('.css-rule');
+            const addBtn = ruleContainer ? ruleContainer.querySelector('.css-rule__add-prop') : null;
+            if (addBtn) {
+                addBtn.click();
+            } else {
+                target.blur();
+            }
+        }
+    }
+});
+
+popup.addEventListener('click', (e) => {
+    if (e.target.classList.contains('css-rule__add-prop')) {
+        const btn = e.target;
+        const ruleBody = btn.previousElementSibling;
+
+        const lastRow = ruleBody.lastElementChild;
+        if (lastRow && lastRow.classList.contains('css-rule__declaration')) {
+            const p = lastRow.querySelector('.css-rule__property').textContent.trim();
+            const v = lastRow.querySelector('.css-rule__value').textContent.trim();
+            if (!p && !v) {
+                lastRow.querySelector('.css-rule__property').focus();
+                return;
+            }
+        }
+
+
+        let declId = 0;
+        if (lastRow) {
+            const prevSpan = lastRow.querySelector('[data-decl-id]');
+            if (prevSpan && prevSpan.dataset.declId) {
+                declId = parseInt(prevSpan.dataset.declId, 10);
+            }
+        }
+
+        declId++;
+
+        const newRow = document.createElement('div');
+        newRow.className = 'css-rule__declaration';
+        newRow.innerHTML = `
+            <span class="css-rule__property" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">: </span><span class="css-rule__value" contenteditable="plaintext-only" data-type="new decl" data-decl-id="${declId}"></span><span class="css-rule__delimiter">;</span>
+        `;
+        ruleBody.appendChild(newRow);
+        newRow.querySelector('.css-rule__property').focus();
+    }
+});
+
+// Removing empty properties on focusout
+popup.addEventListener('focusout', (e) => {
+    const target = e.target;
+    if (!target.isContentEditable) return;
+    const row = e.target.closest('.css-rule__declaration');
+    if (!row) return;
+
+    setTimeout(() => {
+        if (!row.contains(shadow.activeElement)) {
+            const p = row.querySelector('.css-rule__property').textContent.trim();
+            const v = row.querySelector('.css-rule__value').textContent.trim();
+            if (!p || !v) {
+                row.remove();
+            }
+        }
+    }, 10);
+})
+
+function updateStyles() {
+
+    if (!changeLog || changeLog.length === 0) return;
+
+    const style = document.createElement('style');
+    style.id = 'css-editor-overrides';
+    document.head.appendChild(style);
+
+
+    let changedCssText = ""
+    for (const change of changeLog) {
+        const originalRuleObj = window.CSS_DB.find(r => r.id === change.ruleId);
+        if (!originalRuleObj) continue;
+        const selectorText = change.ruleSelector + "{";
+        changedCssText += selectorText;
+        switch (change.type) {
+            case "selector":
+                for (const decl of originalRuleObj.styles) {
+                    changedCssText += decl.prop + ":" + decl.val + ";";
+                }
+                break;
+
+            case "property":
+                const propDeclObj = originalRuleObj.styles.find(
+                    obj => obj.id === parseInt(change.declId)
+                );
+                if (propDeclObj) {
+                    changedCssText += change.newValue + ":" + propDeclObj.val + ";";
+                }
+                break;
+
+            case "value":
+                const valueDeclObj = originalRuleObj.styles.find(
+                    obj => obj.id === parseInt(change.declId)
+                );
+                if (valueDeclObj) {
+                    changedCssText += valueDeclObj.prop + ":" + change.newValue + ";";
+                }
+                break;
+            case "new decl":
+
+                //   ruleId: ruleId,
+                //   newValue: newValue,
+                //   type: type,
+                //   ruleSelector: ruleSelector,
+                //   ruleSource: ruleSource,
+                //   declId: declId,
+                //   oldValue: oldValue
+
+               // const newProp = newRow.querySelector('.css-rule__property').textContent.trim();
+               // const newVal = newRow.querySelector('.css-rule__value').textContent.trim();
+//
+               // if (newProp && newVal) {
+               //     changedCssText += newProp + ":" + newVal + ";";
+               // }
+               // Find how you're gonna handle new properties. and then add the function to show new styles, add isEdited to true and then its implication
+                break;
+        }
+
+        changedCssText += "}";
+    }
+
+    style.textContent = changedCssText;
+}
+
+popup.addEventListener('focusout', (e) => {
+    const target = e.target;
+    if (!target.isContentEditable) return;
+
+    const ruleContainer = target.closest('.css-rule');
+    if (!ruleContainer) return;
+
+    const ruleId = parseInt(ruleContainer.dataset.ruleId);
+    const newValue = target.textContent;
+    const type = target.dataset.type;
+
+    const ruleObj = window.CSS_DB.find(r => r.id === ruleId);
+    if (!ruleObj) return;
+
+    const ruleSelector = ruleObj.selector;
+    const ruleSource = ruleObj.source;
+    let declId = -1;
+    let oldValue;
+
+    switch (type) {
+        case "selector":
+            oldValue = ruleObj.selector;
+            break;
+        case "property":
+            declId = target.dataset.declId;
+            oldValue = ruleObj.styles.find(item => item.id == declId).prop;
+            break;
+        case "value":
+            declId = target.dataset.declId;
+            oldValue = ruleObj.styles.find(item => item.id == declId).val;
+            break;
+        case "new decl":
+            declId = target.dataset.declId;
+            oldValue = "";
+            break;
+    }
+    if (oldValue == newValue) return;
+    changeLog.push({
+        ruleId: ruleId,
+        newValue: newValue,
+        type: type,
+        ruleSelector: ruleSelector,
+        ruleSource: ruleSource,
+        declId: declId,
+        oldValue: oldValue
+    });
+    updateStyles();
+});
