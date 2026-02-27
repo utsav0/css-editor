@@ -405,7 +405,6 @@ function updateStyles() {
                     obj => obj.id === parseInt(change.declId)
                 );
                 if (propDeclObj) {
-                    // Check if the value was also edited for this same decl
                     const companionVal = changeLog.find(
                         c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "value"
                     );
@@ -416,7 +415,6 @@ function updateStyles() {
             }
 
             case "value": {
-                // If there's also a property change for this decl, skip — the property case already handles the full pair
                 const companionProp = changeLog.find(
                     c => c.ruleId === change.ruleId && c.declId == change.declId && c.type === "property"
                 );
@@ -446,8 +444,7 @@ function updateStyles() {
     style.textContent = changedCssText;
 }
 
-popup.addEventListener('focusout', (e) => {
-    const target = e.target;
+function recordChange(target) {
     if (!target.isContentEditable) return;
 
     const ruleContainer = target.closest('.css-rule');
@@ -516,7 +513,6 @@ popup.addEventListener('focusout', (e) => {
 
     if (existingIdx !== -1) {
         if (oldValue == newValue) {
-            // Edited back to original — remove the entry entirely
             changeLog.splice(existingIdx, 1);
         } else {
             changeLog[existingIdx].newValue = newValue;
@@ -535,4 +531,17 @@ popup.addEventListener('focusout', (e) => {
         });
     }
     updateStyles();
+}
+
+popup.addEventListener('focusout', (e) => {
+    recordChange(e.target);
+});
+
+let inputDebounceTimer = null;
+popup.addEventListener('input', (e) => {
+    const targetEl = e.target;
+    clearTimeout(inputDebounceTimer);
+    inputDebounceTimer = setTimeout(() => {
+        recordChange(targetEl);
+    }, 300);
 });
